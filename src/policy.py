@@ -51,7 +51,8 @@ class Policy(object):
         # Output from the network, computed values for each action.
         # In each step we will execute action with the maximum value.
         NetworkClass = network_dict[network]
-        self.action_op = NetworkClass(self.input_placeholder, self.out_num, self.nonlin, self.is_training)
+        self.action_op = NetworkClass(self.input_placeholder,
+                                      self.out_num, self.nonlin, self.is_training)
 
         # Tensorflow operation to compute and save virtual batch normalization statistics.
         self.vb_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -65,7 +66,8 @@ class Policy(object):
         self.parameter_shapes = [Policy.shape2int(p) for p in self.parameters]
 
         # Operations to assign new values to the parameters.
-        self.parameters_placeholders = [tf.placeholder(dtype=tf.float32, shape=s) for s in self.parameter_shapes]
+        self.parameters_placeholders = [tf.placeholder(
+            dtype=tf.float32, shape=s) for s in self.parameter_shapes]
         self.set_parameters_ops = [par.assign(placeholder) for par, placeholder in
                                    zip(self.parameters, self.parameters_placeholders)]
 
@@ -96,7 +98,8 @@ class Policy(object):
     def set_vb(self, vb):
         self.vb = vb
         # Computes normalization statistics using virtual batch.
-        self.sess.run(self.vb_op, feed_dict={self.input_placeholder: self.vb, self.is_training: True})
+        self.sess.run(self.vb_op, feed_dict={
+                      self.input_placeholder: self.vb, self.is_training: True})
 
     def get_parameters(self):
         # Extracts parameters from the network and returns flat 1D array with parameter values.
@@ -109,13 +112,15 @@ class Policy(object):
         current_position = 0
         for parameter_placeholder, shape in zip(self.parameters_placeholders, self.parameter_shapes):
             length = np.prod(shape)
-            feed_dict[parameter_placeholder] = parameters[current_position:current_position+length].reshape(shape)
+            feed_dict[parameter_placeholder] = parameters[current_position:current_position +
+                                                          length].reshape(shape)
             current_position += length
         self.sess.run(self.set_parameters_ops, feed_dict=feed_dict)
 
         # We need to update normalization statistics each time new parameters are set.
         if self.vb is not None:
-            self.sess.run(self.vb_op, feed_dict={self.input_placeholder: self.vb, self.is_training: True})
+            self.sess.run(self.vb_op, feed_dict={
+                          self.input_placeholder: self.vb, self.is_training: True})
 
     def rollout(self, render=False):
         # Evaluates the policy for up to max_episode_len steps.
@@ -124,7 +129,8 @@ class Policy(object):
         t = 0
         rew_sum = 0
         for _ in range(self.max_episode_len):
-            ac = self.sess.run(self.action_op, feed_dict={self.input_placeholder: [ob], self.is_training: False})
+            ac = self.sess.run(self.action_op, feed_dict={
+                               self.input_placeholder: [ob], self.is_training: False})
             ob, rew, done, _ = self.env.step(np.argmax(ac))
             ob = np.asarray(ob)
             rew_sum += rew
@@ -156,7 +162,8 @@ class DropoutPolicy(Policy):
             size = np.prod([int(s) for s in p.shape])
 
             if i in layers:
-                indices = state.choice(range(offset, offset + size), size=int(size*keep), replace=False)
+                indices = state.choice(range(offset, offset + size),
+                                       size=int(size*keep), replace=False)
                 self.mask.extend(indices)
             else:
                 self.mask.extend(range(offset, offset + size))

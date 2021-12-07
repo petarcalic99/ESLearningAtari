@@ -8,7 +8,7 @@ class BaseOptimizer(object):
         # Worker id (MPI stuff).
         self.rank = rank
         # 2 GB of random noise as in OpenAI paper.
-        self.noise_table = np.random.RandomState(123).randn(int(5e8)).astype('float32')
+        self.noise_table = np.random.RandomState(123).randn(int(5e7)).astype('float32')
         # Dimensionality of the problem
         self.n = len(parameters)
         # Current solution (The one that we report).
