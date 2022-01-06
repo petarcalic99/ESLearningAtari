@@ -26,7 +26,7 @@ optimizer_dict = {
 # solution in each iteration.
 # run_name comes useful when the same hyperparameters
 # are evaluated multiple times.
-def main(ep_per_cpu, game, configuration_file, run_name):
+def main(ep_per_cpu, game, configuration_file, run_name, run_duration):
     start_time = time.time()
 
     with open(configuration_file, 'r') as f:
@@ -93,7 +93,9 @@ def main(ep_per_cpu, game, configuration_file, run_name):
     # We will count number of steps
     # frames = 4 * steps (3 * steps for SpaceInvaders)
     steps_passed = 0
-    while True:
+    timeout = time.time() + run_duration * 3600
+
+    while time.time() < timeout:
         # Iteration start time
         iter_start_time = time.time()
         # Workers that run train episodes
@@ -199,10 +201,11 @@ def parse_arguments():
                         default="./configurations/sample_configuration.json")
     parser.add_argument('-r', '--run_name',
                         help='Name of the run, used to create log folder name', type=str)
+    parser.add_argument('-d', '--duration', default=1)
     args = parser.parse_args()
-    return args.episodes_per_cpu, args.game, args.configuration_file, args.run_name
+    return args.episodes_per_cpu, args.game, args.configuration_file, args.run_name, args.duration
 
 
 if __name__ == '__main__':
-    ep_per_cpu, game, configuration_file, run_name = parse_arguments()
-    main(ep_per_cpu, game, configuration_file, run_name)
+    ep_per_cpu, game, configuration_file, run_name, duration = parse_arguments()
+    main(ep_per_cpu, game, configuration_file, run_name, duration)
