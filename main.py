@@ -43,7 +43,7 @@ def main(ep_per_cpu, game, configuration_file, run_name, run_duration):
     train_cpus = cpus - 1
 
     # Deduce population size
-    lam = train_cpus * ep_per_cpu
+    lam = 16 # used to be train_cpus * ep_per_cpu
 
     # Create environment
     env = gym.make(env_name)
