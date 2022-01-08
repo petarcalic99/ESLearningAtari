@@ -195,13 +195,13 @@ def parse_arguments():
     parser.add_argument('-e', '--episodes_per_cpu',
                         help="Number of episode evaluations for each CPU, "
                              "population_size = episodes_per_cpu * Number of CPUs",
-                        default=1, type=int)
+                        default=10, type=int)
     parser.add_argument('-g', '--game', help="Atari Game used to train an agent", default="Qbert")
     parser.add_argument('-c', '--configuration_file', help='Path to configuration file',
                         default="./configurations/sample_configuration.json")
     parser.add_argument('-r', '--run_name',
                         help='Name of the run, used to create log folder name', type=str)
-    parser.add_argument('-d', '--duration', default=1)
+    parser.add_argument('-d', '--duration', default=1, type=int)
     args = parser.parse_args()
     return args.episodes_per_cpu, args.game, args.configuration_file, args.run_name, args.duration
 
