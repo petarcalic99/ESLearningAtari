@@ -1,211 +1,118 @@
-from src.optimizers import OpenAIOptimizer, CanonicalESOptimizer, CanonicalESMeanOptimizer
+import numpy as np
+from argparse import ArgumentParser
+from src.es import OpenES, sepCEM
 from src.policy import Policy
 from src.logger import Logger
-
-from argparse import ArgumentParser
-from mpi4py import MPI
-import numpy as np
-import time
-import json
 import gym
+import json
+import time
 
 
-# This will allow us to create optimizer based on the string value from the configuration file.
-# Add you optimizers to this dictionary.
-optimizer_dict = {
-    'OpenAIOptimizer': OpenAIOptimizer,
-    'CanonicalESOptimizer': CanonicalESOptimizer,
-    'CanonicalESMeanOptimizer': CanonicalESMeanOptimizer
-}
-
-
-# Main function that executes training loop.
-# Population size is derived from the number of CPUs
-# and the number of episodes per CPU.
-# One CPU (id: 0) is used to evaluate currently proposed
-# solution in each iteration.
-# run_name comes useful when the same hyperparameters
-# are evaluated multiple times.
-def main(ep_per_cpu, game, configuration_file, run_name, run_duration):
+def run_solver(solver, run_duration):
+    """
+        Run the given solver, print and save logs
+    """
+    history = []
     start_time = time.time()
-
-    with open(configuration_file, 'r') as f:
-        configuration = json.loads(f.read())
-
-    env_name = '%sNoFrameskip-v4' % game
-
-    # MPI stuff
-    comm = MPI.COMM_WORLD
-    rank = comm.Get_rank()
-    cpus = comm.Get_size()
-
-    # One cpu (rank 0) will evaluate results
-    train_cpus = cpus - 1
-
-    # Deduce population size
-    lam = train_cpus * ep_per_cpu
-
-    # Create environment
-    env = gym.make(env_name)
-
-    # Create policy (Deep Neural Network)
-    # Internally it applies preprocessing to the environment state
-    policy = Policy(env, network=configuration['network'], nonlin_name=configuration['nonlin_name'])
-
-    # Create reference batch used for normalization
-    # It will be overwritten with vb from worker with rank 0
-    vb = policy.get_vb()
-
-    # Extract vector with current parameters.
-    parameters = policy.get_parameters()
-
-    # Send parameters from worker 0 to all workers (MPI stuff)
-    # to ensure that every worker starts in the same position
-    comm.Bcast([parameters, MPI.FLOAT], root=0)
-    comm.Bcast([vb, MPI.FLOAT], root=0)
-
-    # Set the same virtual batch for each worker
-    if rank != 0:
-        policy.set_vb(vb)
-
-    # Create optimizer with user defined settings (hyperparameters)
-    OptimizerClass = optimizer_dict[configuration['optimizer']]
-    optimizer = OptimizerClass(parameters, lam, rank, configuration["settings"])
-
-    # Only rank 0 worker will log information from the training
-    logger = None
-    if rank == 0:
-        # Initialize logger, save virtual batch and save some basic stuff at the beginning
-        logger = Logger(optimizer.log_path(game, configuration['network'], run_name))
-        logger.save_vb(vb)
-
-        # Log basic stuff
-        logger.log('Game'.ljust(25) + '%s' % game)
-        logger.log('Network'.ljust(25) + '%s' % configuration['network'])
-        logger.log('Optimizer'.ljust(25) + '%s' % configuration['optimizer'])
-        logger.log('Number of CPUs'.ljust(25) + '%d' % cpus)
-        logger.log('Population'.ljust(25) + '%d' % lam)
-        logger.log('Dimensionality'.ljust(25) + '%d' % len(parameters))
-
-        # Log basic info from the optimizer
-        optimizer.log_basic(logger)
-
-    # We will count number of steps
-    # frames = 4 * steps (3 * steps for SpaceInvaders)
-    steps_passed = 0
-    timeout = time.time() + run_duration * 3600
+    logger = Logger("logs/"+solver.name+"-"+str(start_time))
+    timeout = start_time + run_duration * 3600
+    best_score = 0
+    iteration = 1
+    global policy
 
     while time.time() < timeout:
-        # Iteration start time
-        iter_start_time = time.time()
-        # Workers that run train episodes
-        if rank != 0:
-            # Empty arrays for each episode. We save: length, reward, noise index
-            lens = [0] * ep_per_cpu
-            rews = [0] * ep_per_cpu
-            inds = [0] * ep_per_cpu
+        solutions = solver.ask()
+        fitness_list = np.zeros(solver.popsize)
+        for i in range(solver.popsize):
+            fitness_list[i] = fit_func(solutions[i])
+        solver.tell(fitness_list)
+        # first element is the best solution, second element is the best fitness
+        result = solver.result()
+        history.append(result[1])
+        duration = time.time() - start_time
 
-            # For each episode in this CPU we get new parameters,
-            # update policy network and perform policy rollout
-            for i in range(ep_per_cpu):
-                ind, p = optimizer.get_parameters()
-                policy.set_parameters(p)
-                e_rew, e_len = policy.rollout()
-                lens[i] = e_len
-                rews[i] = e_rew
-                inds[i] = ind
+        logger.log(str(iteration)+"\t"+str(duration)+"\t"+str(np.mean(fitness_list))+"\t" +
+                   str(np.min(fitness_list))+"\t"+str(np.max(fitness_list))+"\t"+str(result[1])+"\n")
 
-            # Aggregate information, will later send it to each worker using MPI
-            msg = np.array(rews + lens + inds, dtype=np.int32)
+        if iteration % 20 == 0 or result[1] > best_score:
+            print("fitness at iteration", iteration, result[1])
+            print("time from start "+str(duration))
+            print("mean fit : "+str(np.mean(fitness_list)))
+            print("min fit : "+str(np.min(fitness_list)))
+            print("max fit : "+str(np.max(fitness_list)))
+            # save solution
+            logger.save_parameters(np.asarray(result[0]), iteration)
+            # save corresponding virtual batch
+            logger.save_vb(policy.vb)
+            best_score = result[1]
 
-        # Worker rank 0 that runs evaluation episodes
-        else:
-            rews = [0] * ep_per_cpu
-            lens = [0] * ep_per_cpu
-            for i in range(ep_per_cpu):
-                ind, p = optimizer.get_parameters()
-                policy.set_parameters(p)
-                e_rew, e_len = policy.rollout()
-                rews[i] = e_rew
-                lens[i] = e_len
-
-            eval_mean_rew = np.mean(rews)
-            eval_max_rew = np.max(rews)
-
-            # Empty array, evaluation results are not used for the update
-            msg = np.zeros(3 * ep_per_cpu, dtype=np.int32)
-
-        # MPI stuff
-        # Initialize array which will be updated with information from all workers using MPI
-        results = np.empty((cpus, 3 * ep_per_cpu), dtype=np.int32)
-        comm.Allgather([msg, MPI.INT], [results, MPI.INT])
-
-        # Skip empty evaluation results from worker with id 0
-        results = results[1:, :]
-
-        # Extract IDs and rewards
-        rews = results[:, :ep_per_cpu].flatten()
-        lens = results[:, ep_per_cpu:(2*ep_per_cpu)].flatten()
-        ids = results[:, (2*ep_per_cpu):].flatten()
-
-        # Update parameters
-        optimizer.update(ids=ids, rewards=rews)
-
-        # Steps passed = Sum of episode steps from all offsprings
-        steps = np.sum(lens)
-        steps_passed += steps
-
-        # Write some logs for this iteration
-        # Using logs we are able to recover solution saved
-        # after 1 hour of training or after 1 billion frames
-        if rank == 0:
-            iteration_time = (time.time() - iter_start_time)
-            time_elapsed = (time.time() - start_time)/60
-            train_mean_rew = np.mean(rews)
-            train_max_rew = np.max(rews)
-            logger.log('------------------------------------')
-            logger.log('Iteration'.ljust(25) + '%f' % optimizer.iteration)
-            logger.log('EvalMeanReward'.ljust(25) + '%f' % eval_mean_rew)
-            logger.log('EvalMaxReward'.ljust(25) + '%f' % eval_max_rew)
-            logger.log('TrainMeanReward'.ljust(25) + '%f' % train_mean_rew)
-            logger.log('TrainMaxReward'.ljust(25) + '%f' % train_max_rew)
-            logger.log('StepsSinceStart'.ljust(25) + '%f' % steps_passed)
-            logger.log('StepsThisIter'.ljust(25) + '%f' % steps)
-            logger.log('IterationTime'.ljust(25) + '%f' % iteration_time)
-            logger.log('TimeSinceStart'.ljust(25) + '%f' % time_elapsed)
-
-            # Give optimizer a chance to log its own stuff
-            optimizer.log(logger)
-            logger.log('------------------------------------')
-
-            # Write stuff for training curve plot
-            stat_string = "{},\t{},\t{},\t{},\t{},\t{}\n".\
-                format(steps_passed, (time.time()-start_time),
-                       eval_mean_rew, eval_max_rew, train_mean_rew, train_max_rew)
-            logger.write_general_stat(stat_string)
-            logger.write_optimizer_stat(optimizer.stat_string())
-
-            # Save currently proposed solution every 20 iterations
-            if optimizer.iteration % 20 == 1:
-                logger.save_parameters(optimizer.parameters, optimizer.iteration)
+        iteration += 1
+    print("local optimum discovered by solver:\n", result[0])
+    print("fitness score at this local optimum:", result[1])
+    return history
 
 
-def parse_arguments():
+def eval_actor(parameters, nb_eval=10):
+    """
+        Evaluate the given parameters (solution) and return the mean reward
+    """
+    global policy
+    fit = []
+    policy.set_parameters(parameters)  # set the parameters to the policy
+    for i in range(nb_eval):
+        rew, steps = policy.rollout(False)  # evaluate this policy parameters
+        fit.append(rew)
+    return np.mean(fit)  # return the mean fitness
+
+
+if __name__ == "__main__":  # lots of warning at start due to imports
     parser = ArgumentParser()
-    parser.add_argument('-e', '--episodes_per_cpu',
-                        help="Number of episode evaluations for each CPU, "
-                             "population_size = episodes_per_cpu * Number of CPUs",
-                        default=1, type=int)
-    parser.add_argument('-g', '--game', help="Atari Game used to train an agent", default="Qbert")
-    parser.add_argument('-c', '--configuration_file', help='Path to configuration file',
-                        default="./configurations/sample_configuration.json")
-    parser.add_argument('-r', '--run_name',
-                        help='Name of the run, used to create log folder name', type=str)
-    parser.add_argument('-d', '--duration', default=1)
+    parser.add_argument('--env', default='Qbert', type=str)    # gym env
+    parser.add_argument('--duration', default=1, type=int)
+    parser.add_argument('--pop_size', default=16, type=int)
+    # optimizer to run, choices : OpenES, CEM
+    parser.add_argument('--algo', default="OpenES", type=str)
+    parser.add_argument('--elitism', default=True, type=bool)  # use elitism ?
     args = parser.parse_args()
-    return args.episodes_per_cpu, args.game, args.configuration_file, args.run_name, args.duration
+    print("################################")
+    print("Launched : "+str(args.algo)+", env "+str(args.env))
 
+    # create atari env :
+    env_name = env_name = '%sNoFrameskip-v4' % args.env  # use NoFrameskip game
+    env = gym.make(env_name)
+    # defines fintess function (actor evaluation function)
+    fit_func = eval_actor
+    # create evaluation policy for parameters, based on the Nature network of CES (needs CES configuration file)
+    with open("configurations/sample_configuration.json", 'r') as f:
+        configuration = json.loads(f.read())
+    policy = Policy(
+        env, network=configuration['network'], nonlin_name=configuration['nonlin_name'])
+    vb = policy.get_vb()  # init virtual batch
+    nb_params = len(policy.get_parameters())
 
-if __name__ == '__main__':
-    ep_per_cpu, game, configuration_file, run_name, duration = parse_arguments()
-    main(ep_per_cpu, game, configuration_file, run_name, duration)
+    if args.algo == "OpenES":
+        # defines OpenAI's ES algorithm solver. Note that we needed to anneal the sigma parameter # pop 10
+        optimizer = OpenES(nb_params,              # number of model parameters
+                           sigma_init=0.6,                # initial standard deviation
+                           sigma_decay=1,                 # annealing coefficient for standard deviation
+                           learning_rate=0.1,             # learning rate for standard deviation
+                           learning_rate_decay=1,       # annealing coefficient for learning rate
+                           popsize=args.pop_size,         # population size
+                           antithetic=False,              # whether to use antithetic sampling
+                           weight_decay=0,                # weight decay coefficient
+                           rank_fitness=False,            # use rank rather than fitness numbers
+                           forget_best=not args.elitism)  # cancel elitism ?
+    elif args.algo == "CEM":
+        optimizer = sepCEM(nb_params,
+                           mu_init=None,
+                           sigma_init=1e-3,
+                           pop_size=args.pop_size,
+                           damp=1e-3,
+                           damp_limit=1e-5,
+                           parents=None,
+                           elitism=args.elitism,
+                           antithetic=False)
+    else:
+        print("Optimizer is not available. Available : OpenES, CEM.")
+
+    history = run_solver(optimizer, args.duration)  # launching the algorithm
