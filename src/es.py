@@ -402,9 +402,6 @@ class sepCMAES:
 
         ############################################
 
-        if self.antithetic or self.use_noise_table:
-            self.half_popsize = int(self.popsize / 2)
-
         # stuff
         self.step_size = step_size_init
         self.p_c = np.zeros(self.num_params)
@@ -420,6 +417,9 @@ class sepCMAES:
         self.parents_eff = 1 / (self.weights ** 2).sum()
         self.rank_fitness = rank_fitness
         self.weight_decay = weight_decay
+
+        if self.antithetic or self.use_noise_table:
+            self.half_popsize = int(self.popsize / 2)
 
         # adaptation  parameters
         self.g = 1
