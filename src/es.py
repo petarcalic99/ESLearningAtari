@@ -460,12 +460,12 @@ class sepCMAES:
 
         if self.antithetic:
             self.epsilon_half = np.random.randn(
-                self.pop_size // 2, self.num_params)
+                self.popsize // 2, self.num_params)
             self.epsilon = np.concatenate(
                 [self.epsilon_half, - self.epsilon_half])
 
         else:
-            self.epsilon = np.random.randn(self.pop_size, self.num_params)
+            self.epsilon = np.random.randn(self.popsize, self.num_params)
 
         self.solutions = np.array(self.mu + self.step_size *
                                   self.epsilon * np.sqrt(self.cov))
