@@ -1,4 +1,5 @@
 import numpy as np
+from copy import deepcopy
 
 
 def compute_ranks(x):
@@ -90,163 +91,7 @@ class Adam(Optimizer):
         return step
 
 
-class CMAES:
-    '''CMA-ES wrapper.'''
-
-    def __init__(self, num_params,      # number of model parameters
-                 sigma_init=0.10,       # initial standard deviation
-                 popsize=255,           # population size
-                 weight_decay=0.01):    # weight decay coefficient
-
-        self.num_params = num_params
-        self.sigma_init = sigma_init
-        self.popsize = popsize
-        self.weight_decay = weight_decay
-        self.solutions = None
-
-        import cma
-        self.es = cma.CMAEvolutionStrategy(self.num_params * [0],
-                                           self.sigma_init,
-                                           {'popsize': self.popsize,
-                                            })
-
-    def rms_stdev(self):
-        sigma = self.es.result[6]
-        return np.mean(np.sqrt(sigma*sigma))
-
-    def ask(self):
-        '''returns a list of parameters'''
-        self.solutions = np.array(self.es.ask())
-        return self.solutions
-
-    def tell(self, reward_table_result):
-        reward_table = -np.array(reward_table_result)
-        if self.weight_decay > 0:
-            l2_decay = compute_weight_decay(self.weight_decay, self.solutions)
-            reward_table += l2_decay
-        # convert minimizer to maximizer.
-        self.es.tell(self.solutions, (reward_table).tolist())
-
-    def current_param(self):
-        return self.es.result[5]  # mean solution, presumably better with noise
-
-    def set_mu(self, mu):
-        pass
-
-    def best_param(self):
-        return self.es.result[0]  # best evaluated solution
-
-    def result(self):  # return best params so far, along with historically best reward, curr reward, sigma
-        r = self.es.result
-        return (r[0], -r[1], -r[1], r[6])
-
-
-class SimpleGA:
-    '''Simple Genetic Algorithm.'''
-
-    def __init__(self, num_params,      # number of model parameters
-                 sigma_init=0.1,        # initial standard deviation
-                 sigma_decay=0.999,     # anneal standard deviation
-                 sigma_limit=0.01,      # stop annealing if less than this
-                 popsize=256,           # population size
-                 elite_ratio=0.1,       # percentage of the elites
-                 forget_best=False,     # forget the historical best elites
-                 weight_decay=0.01,     # weight decay coefficient
-                 ):
-
-        self.num_params = num_params
-        self.sigma_init = sigma_init
-        self.sigma_decay = sigma_decay
-        self.sigma_limit = sigma_limit
-        self.popsize = popsize
-
-        self.elite_ratio = elite_ratio
-        self.elite_popsize = int(self.popsize * self.elite_ratio)
-
-        self.sigma = self.sigma_init
-        self.elite_params = np.zeros((self.elite_popsize, self.num_params))
-        self.elite_rewards = np.zeros(self.elite_popsize)
-        self.best_param = np.zeros(self.num_params)
-        self.best_reward = 0
-        self.first_iteration = True
-        self.forget_best = forget_best
-        self.weight_decay = weight_decay
-
-    def rms_stdev(self):
-        return self.sigma  # same sigma for all parameters.
-
-    def ask(self):
-        '''returns a list of parameters'''
-        self.epsilon = np.random.randn(
-            self.popsize, self.num_params) * self.sigma
-        solutions = []
-
-        def mate(a, b):
-            c = np.copy(a)
-            idx = np.where(np.random.rand((c.size)) > 0.5)
-            c[idx] = b[idx]
-            return c
-
-        elite_range = range(self.elite_popsize)
-        for i in range(self.popsize):
-            idx_a = np.random.choice(elite_range)
-            idx_b = np.random.choice(elite_range)
-            child_params = mate(
-                self.elite_params[idx_a], self.elite_params[idx_b])
-            solutions.append(child_params + self.epsilon[i])
-
-        solutions = np.array(solutions)
-        self.solutions = solutions
-
-        return solutions
-
-    def tell(self, reward_table_result):
-        # input must be a numpy float array
-        assert(len(reward_table_result) ==
-               self.popsize), "Inconsistent reward_table size reported."
-
-        reward_table = np.array(reward_table_result)
-
-        if self.weight_decay > 0:
-            l2_decay = compute_weight_decay(self.weight_decay, self.solutions)
-            reward_table += l2_decay
-
-        if self.forget_best or self.first_iteration:
-            reward = reward_table
-            solution = self.solutions
-        else:
-            reward = np.concatenate([reward_table, self.elite_rewards])
-            solution = np.concatenate([self.solutions, self.elite_params])
-
-        idx = np.argsort(reward)[::-1][0:self.elite_popsize]
-
-        self.elite_rewards = reward[idx]
-        self.elite_params = solution[idx]
-
-        self.curr_best_reward = self.elite_rewards[0]
-
-        if self.first_iteration or (self.curr_best_reward > self.best_reward):
-            self.first_iteration = False
-            self.best_reward = self.elite_rewards[0]
-            self.best_param = np.copy(self.elite_params[0])
-
-        if (self.sigma > self.sigma_limit):
-            self.sigma *= self.sigma_decay
-
-    def current_param(self):
-        return self.elite_params[0]
-
-    def set_mu(self, mu):
-        pass
-
-    def best_param(self):
-        return self.best_param
-
-    def result(self):  # return best params so far, along with historically best reward, curr reward, sigma
-        return (self.best_param, self.best_reward, self.curr_best_reward, self.sigma)
-
-
-class sepCEM:  # ADDED CEM
+class sepCEM:
 
     def __init__(self, num_params,  # number of model parameters
                  mu_init=None,
@@ -259,7 +104,7 @@ class sepCEM:  # ADDED CEM
                  antithetic=False):
         # misc
         self.num_params = num_params
-        self.name = "CES"
+        self.name = "CEM"
 
         # distribution parameters
         if mu_init is None:
@@ -373,10 +218,10 @@ class OpenES:
 
     def __init__(self, num_params,             # number of model parameters
                  sigma_init=0.01,               # initial standard deviation
-                 sigma_decay=1,  # 0.999,            # anneal standard deviation
+                 sigma_decay=0.999,            # anneal standard deviation
                  sigma_limit=0.01,             # stop annealing if less than this
-                 learning_rate=1,  # 0.01,           # learning rate for standard deviation
-                 learning_rate_decay=1,  # 0.9999, # annealing the learning rate
+                 learning_rate=0.01,           # learning rate for standard deviation
+                 learning_rate_decay=0.9999,  # annealing the learning rate
                  learning_rate_limit=0.001,  # stop annealing learning rate
                  popsize=256,                  # population size
                  antithetic=False,             # whether to use antithetic sampling
@@ -521,3 +366,157 @@ class OpenES:
 
     def result(self):  # return best params so far, along with historically best reward, curr reward, sigma
         return (self.best_mu, self.best_reward, self.curr_best_reward, self.sigma)
+
+
+class sepCMAES:
+
+    """
+    CMAES implementation adapted from
+    https://en.wikipedia.org/wiki/CMA-ES#Example_code_in_MATLAB/Octave
+    """
+
+    def __init__(self,
+                 num_params,
+                 mu_init=None,
+                 sigma_init=1,
+                 step_size_init=1,
+                 pop_size=255,
+                 antithetic=False,
+                 weight_decay=0.01,
+                 rank_fitness=True):
+
+        # distribution parameters
+        self.num_params = num_params
+        if mu_init is not None:
+            self.mu = np.array(mu_init)
+        else:
+            self.mu = np.zeros(num_params)
+        self.antithetic = antithetic
+        self.name = "CMAES"
+
+        ##########         MODIFS         ##########
+        # 2 GB of random noise as in OpenAI paper.
+        self.noise_table = np.random.RandomState(
+            123).randn(int(5e8)).astype('float32')
+        self.use_noise_table = True
+
+        ############################################
+
+        # stuff
+        self.step_size = step_size_init
+        self.p_c = np.zeros(self.num_params)
+        self.p_s = np.zeros(self.num_params)
+        self.cov = sigma_init * np.ones(num_params)
+
+        # selection parameters
+        self.pop_size = pop_size
+        self.parents = pop_size // 2
+        self.weights = np.array([np.log((self.parents + 1) / i)
+                                 for i in range(1, self.parents + 1)])
+        self.weights /= self.weights.sum()
+        self.parents_eff = 1 / (self.weights ** 2).sum()
+        self.rank_fitness = rank_fitness
+        self.weight_decay = weight_decay
+
+        # adaptation  parameters
+        self.g = 1
+        self.c_s = (self.parents_eff + 2) / \
+            (self.num_params + self.parents_eff + 3)
+        self.c_c = 4 / (self.num_params + 4)
+        self.c_cov = 1 / self.parents_eff * 2 / ((self.num_params + np.sqrt(2)) ** 2) + (1 - 1 / self.parents_eff) * \
+            min(1, (2 * self.parents_eff - 1) /
+                (self.parents_eff + (self.num_params + 2) ** 2))
+        self.c_cov *= (self.num_params + 2) / 3
+        self.d_s = 1 + 2 * \
+            max(0, np.sqrt((self.parents_eff - 1) /
+                           (self.num_params + 1) - 1)) + self.c_s
+        self.chi = np.sqrt(self.num_params) * (1 - 1 / (4 *
+                                                        self.num_params) + 1 / (21 * self.num_params ** 2))
+
+    def r_noise_id(self):
+        return np.random.random_integers(0, len(self.noise_table)-self.num_params)
+
+    def ask(self):
+        """
+        Returns a list of candidates parameters
+        """
+        ##########      MODIF      ##########
+        unpair = self.popsize % 2
+        if self.use_noise_table:
+            self.epsilon_half = np.zeros(
+                (self.half_popsize + unpair, self.num_params))
+            for i in range(self.half_popsize + unpair):
+                r_id = self.r_noise_id()
+                self.epsilon_half[i] = self.noise_table[r_id:(
+                    r_id + self.num_params)]
+            self.epsilon = np.concatenate(
+                [self.epsilon_half, - self.epsilon_half])
+            if unpair == 1:
+                self.epsilon = np.delete(self.epsilon, 0, 0)
+        #####################################
+
+        if self.antithetic:
+            self.epsilon_half = np.random.randn(
+                self.pop_size // 2, self.num_params)
+            self.epsilon = np.concatenate(
+                [self.epsilon_half, - self.epsilon_half])
+
+        else:
+            self.epsilon = np.random.randn(self.pop_size, self.num_params)
+
+        self.solutions = np.array(self.mu + self.step_size *
+                                  self.epsilon * np.sqrt(self.cov))
+
+        return self.solutions
+
+    def tell(self, reward_table_result):
+        """
+        Updates the distribution
+        """
+
+        scores = np.array(reward_table_result)
+        scores *= -1
+        idx_sorted = np.argsort(scores)
+
+        # update mean
+        old_mu = deepcopy(self.mu)
+        self.mu = self.weights @ self.solutions[idx_sorted[:self.parents]]
+        z = 1 / self.step_size * 1 / \
+            np.sqrt(self.cov) * \
+            (self.solutions[idx_sorted[:self.parents]] - old_mu)
+        z_w = self.weights @ z
+
+        # update evolution paths
+        self.p_s = (1 - self.c_s) * self.p_s + \
+            np.sqrt(self.c_s * (2 - self.c_s) * self.parents_eff) * z_w
+
+        tmp_1 = np.linalg.norm(self.p_s) / np.sqrt(1 - (1 - self.c_s) ** (2 * self.g)) \
+            <= self.chi * (1.4 + 2 / (self.num_params + 1))
+
+        self.p_c = (1 - self.c_c) * self.p_c + \
+            tmp_1 * np.sqrt(self.c_c * (2 - self.c_c)
+                            * self.parents_eff) * np.sqrt(self.cov) * z_w
+
+        # update covariance matrix
+        self.cov = (1 - self.c_cov) * self.cov + \
+            self.c_cov * 1 / self.parents_eff * self.p_c * self.p_c + \
+            self.c_cov * (1 - 1 / self.parents_eff) * \
+            (self.weights @ (self.cov * z * z))
+
+        # update step size
+        self.step_size *= np.exp((self.c_s / self.d_s) *
+                                 (np.linalg.norm(self.p_s) / self.chi - 1))
+        self.g += 1
+
+        self.elite = self.solutions[idx_sorted[0]]
+        self.elite_score = scores[idx_sorted[0]]
+
+    def get_distrib_params(self):
+        """
+        Returns the parameters of the distrubtion:
+        the mean and the covariance matrix
+        """
+        return np.copy(self.mu), np.copy(self.step_size)**2 * np.copy(self.cov)
+
+    def result(self):
+        return (self.elite, -1*self.elite_score, self.elite_score)

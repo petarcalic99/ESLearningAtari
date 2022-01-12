@@ -1,6 +1,6 @@
 import numpy as np
 from argparse import ArgumentParser
-from src.es import OpenES, sepCEM
+from src.es import OpenES, sepCEM, sepCMAES
 from src.policy import Policy
 from src.logger import Logger
 import gym
@@ -12,7 +12,7 @@ def run_solver(solver, run_duration):
     """
         Run the given solver, print and save logs
     """
-    history = []
+
     start_time = time.time()
     logger = Logger("logs/"+solver.name+"-"+str(start_time))
     timeout = start_time + run_duration * 3600
@@ -28,7 +28,6 @@ def run_solver(solver, run_duration):
         solver.tell(fitness_list)
         # first element is the best solution, second element is the best fitness
         result = solver.result()
-        history.append(result[1])
         duration = time.time() - start_time
 
         logger.log(str(iteration)+"\t"+str(duration)+"\t"+str(np.mean(fitness_list))+"\t" +
@@ -49,7 +48,6 @@ def run_solver(solver, run_duration):
         iteration += 1
     print("local optimum discovered by solver:\n", result[0])
     print("fitness score at this local optimum:", result[1])
-    return history
 
 
 def eval_actor(parameters, nb_eval=10):
@@ -70,9 +68,8 @@ if __name__ == "__main__":  # lots of warning at start due to imports
     parser.add_argument('--env', default='Qbert', type=str)    # gym env
     parser.add_argument('--duration', default=1, type=int)
     parser.add_argument('--pop_size', default=16, type=int)
-    # optimizer to run, choices : OpenES, CEM
+    # optimizer to run, choices : OpenES, CEM, CMAES
     parser.add_argument('--algo', default="OpenES", type=str)
-    parser.add_argument('--elitism', default=True, type=bool)  # use elitism ?
     args = parser.parse_args()
     print("################################")
     print("Launched : "+str(args.algo)+", env "+str(args.env))
@@ -91,28 +88,13 @@ if __name__ == "__main__":  # lots of warning at start due to imports
     nb_params = len(policy.get_parameters())
 
     if args.algo == "OpenES":
-        # defines OpenAI's ES algorithm solver. Note that we needed to anneal the sigma parameter # pop 10
-        optimizer = OpenES(nb_params,              # number of model parameters
-                           sigma_init=0.6,                # initial standard deviation
-                           sigma_decay=1,                 # annealing coefficient for standard deviation
-                           learning_rate=0.1,             # learning rate for standard deviation
-                           learning_rate_decay=1,       # annealing coefficient for learning rate
-                           popsize=args.pop_size,         # population size
-                           antithetic=False,              # whether to use antithetic sampling
-                           weight_decay=0,                # weight decay coefficient
-                           rank_fitness=False,            # use rank rather than fitness numbers
-                           forget_best=not args.elitism)  # cancel elitism ?
+        optimizer = OpenES(nb_params, popsize=args.pop_size,
+                           rank_fitness=False, forget_best=False)
     elif args.algo == "CEM":
-        optimizer = sepCEM(nb_params,
-                           mu_init=None,
-                           sigma_init=1e-3,
-                           pop_size=args.pop_size,
-                           damp=1e-3,
-                           damp_limit=1e-5,
-                           parents=None,
-                           elitism=args.elitism,
-                           antithetic=False)
+        optimizer = sepCEM(nb_params, pop_size=args.pop_size)
+    elif args.algo == "CMAES":
+        optimizer = sepCMAES(nb_params, pop_size=args.pop_size)
     else:
-        print("Optimizer is not available. Available : OpenES, CEM.")
+        print("Optimizer is not available. Available : OpenES, CEM, CMAES.")
 
-    history = run_solver(optimizer, args.duration)  # launching the algorithm
+    run_solver(optimizer, args.duration)  # launching the algorithm
