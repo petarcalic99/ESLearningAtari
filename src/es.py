@@ -402,6 +402,9 @@ class sepCMAES:
 
         ############################################
 
+        if self.antithetic or self.use_noise_table:
+            self.half_popsize = int(self.popsize / 2)
+
         # stuff
         self.step_size = step_size_init
         self.p_c = np.zeros(self.num_params)
@@ -409,7 +412,7 @@ class sepCMAES:
         self.cov = sigma_init * np.ones(num_params)
 
         # selection parameters
-        self.pop_size = pop_size
+        self.popsize = pop_size
         self.parents = pop_size // 2
         self.weights = np.array([np.log((self.parents + 1) / i)
                                  for i in range(1, self.parents + 1)])
